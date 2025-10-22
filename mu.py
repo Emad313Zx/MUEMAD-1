@@ -3,12 +3,19 @@ import logging
 import asyncio
 import tempfile
 import shutil
+from flask import Flask
+from threading import Thread
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from yt_dlp import YoutubeDL, DownloadError
 
+# Set up Flask app for web service
+app = Flask(__name__)
+
+# Set up logging
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", 
+    level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
@@ -16,7 +23,6 @@ BOT_TOKEN = "8348486900:AAEmiSgwX0B9ByJjbla_ytqKjGCPGCzbKjE"
 
 async def download_audio_file(query: str) -> str | None:
     """Download audio file and return the file path"""
-    # Create a temporary directory for downloads
     temp_dir = tempfile.mkdtemp()
     filename = os.path.join(temp_dir, "temp_song.%(ext)s")
     
@@ -49,12 +55,10 @@ async def download_audio_file(query: str) -> str | None:
         
     except DownloadError as e:
         logger.error(f"Download error: {e}")
-        # Clean up temp directory on error
         shutil.rmtree(temp_dir, ignore_errors=True)
         return None
     except Exception as e:
         logger.error(f"Unexpected error: {e}")
-        # Clean up temp directory on error
         shutil.rmtree(temp_dir, ignore_errors=True)
         return None
 
@@ -76,12 +80,9 @@ async def yt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
         if path and os.path.exists(path):
             try:
-                # Get file size
                 file_size = os.path.getsize(path)
-                # Telegram has a 50MB file size limit for bots
                 if file_size > 50 * 1024 * 1024:
                     await update.message.reply_text("❌ File is too large (more than 50MB)")
-                    # Clean up
                     shutil.rmtree(os.path.dirname(path), ignore_errors=True)
                     return
 
@@ -95,13 +96,11 @@ async def yt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                         pool_timeout=60
                     )
                 
-                # Clean up the temporary directory
                 shutil.rmtree(os.path.dirname(path), ignore_errors=True)
                 
             except Exception as e:
                 logger.error(f"Error sending file: {e}")
                 await update.message.reply_text("❌ Error while sending the file.")
-                # Clean up on error
                 if path and os.path.exists(path):
                     shutil.rmtree(os.path.dirname(path), ignore_errors=True)
         else:
@@ -139,11 +138,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 /start - بدء البوت
 /song [اسم الأغنية] - تحميل صوت من يوتيوب
 /help - عرض رسالة المساعدة
-
-📝 **أمثلة:**
-/song فيروز
-/song أم كلثوم
-/song "عبد الحليم حافظ"
 """
     await update.message.reply_text(help_text)
 
@@ -151,29 +145,50 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     """Handle errors in the telegram bot"""
     logger.error(f"Exception while handling an update: {context.error}")
 
-def main():
-    """Main function to run the bot"""
+def run_bot():
+    """Run the Telegram bot in a separate thread"""
     try:
-        app = Application.builder().token(BOT_TOKEN).build()
+        bot_app = Application.builder().token(BOT_TOKEN).build()
         
-        # Add handlers - using only English commands
-        app.add_handler(CommandHandler("start", start_command))
-        app.add_handler(CommandHandler("song", yt_command))
-        app.add_handler(CommandHandler("s", yt_command))  # Short version
-        app.add_handler(CommandHandler("help", help_command))
+        # Add handlers
+        bot_app.add_handler(CommandHandler("start", start_command))
+        bot_app.add_handler(CommandHandler("song", yt_command))
+        bot_app.add_handler(CommandHandler("s", yt_command))
+        bot_app.add_handler(CommandHandler("help", help_command))
         
-        # Add error handler
-        app.add_error_handler(error_handler)
+        bot_app.add_error_handler(error_handler)
         
-        print("🤖 Bot is starting...")
-        print("✅ Available commands: /start, /song, /s, /help")
-        app.run_polling(
-            drop_pending_updates=True,
-            allowed_updates=Update.ALL_TYPES
-        )
+        logger.info("🤖 Telegram Bot is starting...")
+        print("✅ Bot is running and waiting for messages...")
+        
+        # Run the bot
+        bot_app.run_polling(drop_pending_updates=True)
         
     except Exception as e:
         logger.error(f"Failed to start bot: {e}")
 
+@app.route('/')
+def home():
+    """Root endpoint for web service"""
+    return "🤖 Telegram Music Bot is running! Use /start in Telegram to begin."
+
+@app.route('/health')
+def health():
+    """Health check endpoint"""
+    return "✅ Bot is healthy and running"
+
+@app.route('/status')
+def status():
+    """Status endpoint"""
+    return "🎵 Music Bot Status: Active - Ready to download songs"
+
+# Start the bot when the web service starts
 if __name__ == '__main__':
-    asyncio.run(main())
+    # Start the Telegram bot in a separate thread
+    bot_thread = Thread(target=lambda: asyncio.run(run_bot()))
+    bot_thread.daemon = True
+    bot_thread.start()
+    
+    # Start the Flask web server
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port, debug=False)
